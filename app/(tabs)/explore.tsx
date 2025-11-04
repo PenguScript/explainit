@@ -10,17 +10,17 @@ import {
   ScrollView,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
-import { readAsStringAsync } from "expo-file-system/legacy";
+import * as FileSystem from "expo-file-system/legacy";
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
 import * as ImageManipulator from "expo-image-manipulator";
-
 
 export default function HomeScreen() {
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [extractedText, setExtractedText] = useState("");
   const [aiResult, setAiResult] = useState("");
   const [loading, setLoading] = useState(false);
+  const MAX_FILE_SIZE = 1024 * 1024; // 1 MB cap for uploads
 
   // Pick an image from gallery
   const pickImage = async () => {
@@ -62,7 +62,6 @@ export default function HomeScreen() {
     }
   };
 
-  
   // Extract text from image using OCR.space
   const extractText = async (uri: string) => {
     try {
@@ -79,8 +78,17 @@ export default function HomeScreen() {
 
       // Step 2: If still >1MB, reduce quality further
       const getFileSize = async (fileUri: string) => {
-        const info = await FileSystem.getInfoAsync(fileUri);
-        return info.size ?? 0;
+        try {
+          const info = await FileSystem.getInfoAsync(fileUri);
+          if (!info.exists) {
+            console.warn("⚠️ File does not exist at:", fileUri);
+            return 0;
+          }
+          return info.size ?? 0;
+        } catch (err) {
+          console.error("Error getting file size:", err);
+          return 0;
+        }
       };
 
       let size = await getFileSize(compressed.uri);
@@ -97,9 +105,8 @@ export default function HomeScreen() {
       }
 
       console.log("✅ Final image size:", (size / 1024).toFixed(2), "KB");
-
       // Step 3: Convert to base64
-      const base64 = await readAsStringAsync(compressed.uri, {
+      const base64 = await FileSystem.readAsStringAsync(compressed.uri, {
         encoding: "base64",
       });
 
@@ -137,13 +144,14 @@ export default function HomeScreen() {
   const analyzeWithAI = async (text: string) => {
     try {
       setLoading(true);
-      const res = await fetch("https://your-secure-api.com/api/analyze", {
+      const res = await fetch("https://explainitapi.vercel.app/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
       });
 
       const data = await res.json();
+      console.log("AI Response:", data);
       setAiResult(data.result || "No result from AI.");
     } catch (err) {
       console.error(err);
