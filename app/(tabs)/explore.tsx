@@ -1,9 +1,20 @@
 import React, { useState } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, Image, ActivityIndicator, Alert, ScrollView } from "react-native";
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  Image,
+  ActivityIndicator,
+  Alert,
+  ScrollView,
+} from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { readAsStringAsync } from "expo-file-system/legacy";
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
+import * as ImageManipulator from "expo-image-manipulator";
+
 
 export default function HomeScreen() {
   const [imageUri, setImageUri] = useState<string | null>(null);
@@ -15,7 +26,10 @@ export default function HomeScreen() {
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
-      Alert.alert("Permission required", "Please grant access to your media library.");
+      Alert.alert(
+        "Permission required",
+        "Please grant access to your media library."
+      );
       return;
     }
 
@@ -48,75 +62,64 @@ export default function HomeScreen() {
     }
   };
 
+  
   // Extract text from image using OCR.space
   const extractText = async (uri: string) => {
     try {
-    setLoading(true);
-    setExtractedText("");
-    setAiResult("");
+      setLoading(true);
+      setExtractedText("");
+      setAiResult("");
 
-    const base64 = await readAsStringAsync(uri, { encoding: "base64" });
+      // Step 1: Compress and resize image until under 1MB
+      let compressed = await ImageManipulator.manipulateAsync(
+        uri,
+        [{ resize: { width: 1280 } }], // resize for a good baseline
+        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+      );
 
-    const formData = new FormData();
-    formData.append("apikey", "K85683965888957"); // 🔒 keep this in secure storage if needed
-    formData.append("base64Image", `data:image/jpeg;base64,${base64}`);
+      // Step 2: If still >1MB, reduce quality further
+      const getFileSize = async (fileUri: string) => {
+        const info = await FileSystem.getInfoAsync(fileUri);
+        return info.size ?? 0;
+      };
 
-      // ensure payload is <= 1024 KB (1 MB). Use expo-image-manipulator dynamically to avoid changing top imports.
-      let payload: any = formData;
-      try {
-        const maxBytes = 1024 * 1024;
-        const calcBytes = (b64: string) => Math.ceil((b64.length * 3) / 4);
+      let size = await getFileSize(compressed.uri);
+      let quality = 0.6;
 
-        // if already under limit, just send
-        if (calcBytes(base64) > maxBytes) {
-          const ImageManipulator = await import("expo-image-manipulator");
-          // start with a reasonably high quality and reduce until under limit
-          let quality = 0.9;
-          let manipulatedBase64: string | undefined = undefined;
-
-          while (quality >= 0.1) {
-        const result = await ImageManipulator.manipulateAsync(uri, [], {
-          compress: quality,
-          format: ImageManipulator.SaveFormat.JPEG,
-          base64: true,
-        });
-
-        if (result.base64) {
-          manipulatedBase64 = result.base64;
-          if (calcBytes(manipulatedBase64) <= maxBytes) break;
-        } else {
-          // if manipulation didn't return base64, break to avoid infinite loop
-          break;
-        }
-
-        quality -= 0.15; // reduce quality and retry
-          }
-
-          if (manipulatedBase64) {
-        // build a fresh FormData with the compressed image (ensures we don't send the original large one)
-        const newForm = new FormData();
-        newForm.append("apikey", "K85683965888957");
-        newForm.append("base64Image", `data:image/jpeg;base64,${manipulatedBase64}`);
-        payload = newForm;
-        console.log("Compressed image to bytes:", calcBytes(manipulatedBase64));
-          } else {
-        console.warn("Could not compress image via ImageManipulator; sending original (may be large).");
-          }
-        }
-      } catch (e) {
-        console.warn("Image compression step failed, continuing with original image:", e);
+      while (size > MAX_FILE_SIZE && quality > 0.1) {
+        compressed = await ImageManipulator.manipulateAsync(
+          compressed.uri,
+          [],
+          { compress: quality, format: ImageManipulator.SaveFormat.JPEG }
+        );
+        size = await getFileSize(compressed.uri);
+        quality -= 0.1;
       }
+
+      console.log("✅ Final image size:", (size / 1024).toFixed(2), "KB");
+
+      // Step 3: Convert to base64
+      const base64 = await readAsStringAsync(compressed.uri, {
+        encoding: "base64",
+      });
+
+      // Step 4: Send to OCR
+      const formData = new FormData();
+      formData.append("apikey", "K85683965888957"); // store securely if needed
+      formData.append("base64Image", `data:image/jpeg;base64,${base64}`);
 
       const response = await fetch("https://api.ocr.space/parse/image", {
         method: "POST",
-        body: payload as any,
+        body: formData as any,
       });
 
       const data = await response.json();
       console.log("OCR Response:", data);
+
       const text = data.ParsedResults?.[0]?.ParsedText?.trim() || "";
       setExtractedText(text);
       console.log("Extracted Text:", text);
+
       if (text) {
         analyzeWithAI(text);
       } else {
@@ -152,7 +155,9 @@ export default function HomeScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <ThemedText type="title" style={styles.title}>ExplainIt AI</ThemedText>
+      <ThemedText type="title" style={styles.title}>
+        ExplainIt AI
+      </ThemedText>
       <ThemedText style={styles.subtitle}>
         Upload or take a picture — we'll extract and simplify the text.
       </ThemedText>
@@ -166,7 +171,13 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
-      {loading && <ActivityIndicator size="large" color="#9b5de5" style={{ marginTop: 20 }} />}
+      {loading && (
+        <ActivityIndicator
+          size="large"
+          color="#9b5de5"
+          style={{ marginTop: 20 }}
+        />
+      )}
 
       {imageUri && <Image source={{ uri: imageUri }} style={styles.preview} />}
 
