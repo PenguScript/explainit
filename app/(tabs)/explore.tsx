@@ -112,7 +112,7 @@ export default function HomeScreen() {
 
       // Step 4: Send to OCR
       const formData = new FormData();
-      formData.append("apikey", "K85683965888957"); // store securely if needed
+      formData.append("apikey", "K85683965888957");
       formData.append("base64Image", `data:image/jpeg;base64,${base64}`);
 
       const response = await fetch("https://api.ocr.space/parse/image", {
