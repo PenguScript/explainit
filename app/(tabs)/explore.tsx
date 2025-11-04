@@ -1,112 +1,246 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import React, { useState } from "react";
+import { View, Text, TouchableOpacity, StyleSheet, Image, ActivityIndicator, Alert, ScrollView } from "react-native";
+import * as ImagePicker from "expo-image-picker";
+import { readAsStringAsync } from "expo-file-system/legacy";
+import { ThemedText } from "@/components/themed-text";
+import { ThemedView } from "@/components/themed-view";
 
-import { Collapsible } from '@/components/ui/collapsible';
-import { ExternalLink } from '@/components/external-link';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Fonts } from '@/constants/theme';
+export default function HomeScreen() {
+  const [imageUri, setImageUri] = useState<string | null>(null);
+  const [extractedText, setExtractedText] = useState("");
+  const [aiResult, setAiResult] = useState("");
+  const [loading, setLoading] = useState(false);
 
-export default function TabTwoScreen() {
+  // Pick an image from gallery
+  const pickImage = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert("Permission required", "Please grant access to your media library.");
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 1,
+    });
+
+    if (!result.canceled) {
+      setImageUri(result.assets[0].uri);
+      extractText(result.assets[0].uri);
+    }
+  };
+
+  // Take a new picture
+  const takePhoto = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert("Permission required", "Please grant camera permissions.");
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      quality: 1,
+    });
+
+    if (!result.canceled) {
+      setImageUri(result.assets[0].uri);
+      extractText(result.assets[0].uri);
+    }
+  };
+
+  // Extract text from image using OCR.space
+  const extractText = async (uri: string) => {
+    try {
+    setLoading(true);
+    setExtractedText("");
+    setAiResult("");
+
+    const base64 = await readAsStringAsync(uri, { encoding: "base64" });
+
+    const formData = new FormData();
+    formData.append("apikey", "K85683965888957"); // 🔒 keep this in secure storage if needed
+    formData.append("base64Image", `data:image/jpeg;base64,${base64}`);
+
+      // ensure payload is <= 1024 KB (1 MB). Use expo-image-manipulator dynamically to avoid changing top imports.
+      let payload: any = formData;
+      try {
+        const maxBytes = 1024 * 1024;
+        const calcBytes = (b64: string) => Math.ceil((b64.length * 3) / 4);
+
+        // if already under limit, just send
+        if (calcBytes(base64) > maxBytes) {
+          const ImageManipulator = await import("expo-image-manipulator");
+          // start with a reasonably high quality and reduce until under limit
+          let quality = 0.9;
+          let manipulatedBase64: string | undefined = undefined;
+
+          while (quality >= 0.1) {
+        const result = await ImageManipulator.manipulateAsync(uri, [], {
+          compress: quality,
+          format: ImageManipulator.SaveFormat.JPEG,
+          base64: true,
+        });
+
+        if (result.base64) {
+          manipulatedBase64 = result.base64;
+          if (calcBytes(manipulatedBase64) <= maxBytes) break;
+        } else {
+          // if manipulation didn't return base64, break to avoid infinite loop
+          break;
+        }
+
+        quality -= 0.15; // reduce quality and retry
+          }
+
+          if (manipulatedBase64) {
+        // build a fresh FormData with the compressed image (ensures we don't send the original large one)
+        const newForm = new FormData();
+        newForm.append("apikey", "K85683965888957");
+        newForm.append("base64Image", `data:image/jpeg;base64,${manipulatedBase64}`);
+        payload = newForm;
+        console.log("Compressed image to bytes:", calcBytes(manipulatedBase64));
+          } else {
+        console.warn("Could not compress image via ImageManipulator; sending original (may be large).");
+          }
+        }
+      } catch (e) {
+        console.warn("Image compression step failed, continuing with original image:", e);
+      }
+
+      const response = await fetch("https://api.ocr.space/parse/image", {
+        method: "POST",
+        body: payload as any,
+      });
+
+      const data = await response.json();
+      console.log("OCR Response:", data);
+      const text = data.ParsedResults?.[0]?.ParsedText?.trim() || "";
+      setExtractedText(text);
+      console.log("Extracted Text:", text);
+      if (text) {
+        analyzeWithAI(text);
+      } else {
+        Alert.alert("No text detected", "Try another image with clearer text.");
+      }
+    } catch (err) {
+      console.error(err);
+      Alert.alert("Error", "Failed to extract text.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Send extracted text to your AI backend
+  const analyzeWithAI = async (text: string) => {
+    try {
+      setLoading(true);
+      const res = await fetch("https://your-secure-api.com/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+
+      const data = await res.json();
+      setAiResult(data.result || "No result from AI.");
+    } catch (err) {
+      console.error(err);
+      Alert.alert("Error", "Could not connect to AI service.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#D0D0D0', dark: '#353636' }}
-      headerImage={
-        <IconSymbol
-          size={310}
-          color="#808080"
-          name="chevron.left.forwardslash.chevron.right"
-          style={styles.headerImage}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText
-          type="title"
-          style={{
-            fontFamily: Fonts.rounded,
-          }}>
-          Explore
-        </ThemedText>
-      </ThemedView>
-      <ThemedText>This app includes example code to help you get started.</ThemedText>
-      <Collapsible title="File-based routing">
-        <ThemedText>
-          This app has two screens:{' '}
-          <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> and{' '}
-          <ThemedText type="defaultSemiBold">app/(tabs)/explore.tsx</ThemedText>
-        </ThemedText>
-        <ThemedText>
-          The layout file in <ThemedText type="defaultSemiBold">app/(tabs)/_layout.tsx</ThemedText>{' '}
-          sets up the tab navigator.
-        </ThemedText>
-        <ExternalLink href="https://docs.expo.dev/router/introduction">
-          <ThemedText type="link">Learn more</ThemedText>
-        </ExternalLink>
-      </Collapsible>
-      <Collapsible title="Android, iOS, and web support">
-        <ThemedText>
-          You can open this project on Android, iOS, and the web. To open the web version, press{' '}
-          <ThemedText type="defaultSemiBold">w</ThemedText> in the terminal running this project.
-        </ThemedText>
-      </Collapsible>
-      <Collapsible title="Images">
-        <ThemedText>
-          For static images, you can use the <ThemedText type="defaultSemiBold">@2x</ThemedText> and{' '}
-          <ThemedText type="defaultSemiBold">@3x</ThemedText> suffixes to provide files for
-          different screen densities
-        </ThemedText>
-        <Image
-          source={require('@/assets/images/react-logo.png')}
-          style={{ width: 100, height: 100, alignSelf: 'center' }}
-        />
-        <ExternalLink href="https://reactnative.dev/docs/images">
-          <ThemedText type="link">Learn more</ThemedText>
-        </ExternalLink>
-      </Collapsible>
-      <Collapsible title="Light and dark mode components">
-        <ThemedText>
-          This template has light and dark mode support. The{' '}
-          <ThemedText type="defaultSemiBold">useColorScheme()</ThemedText> hook lets you inspect
-          what the user&apos;s current color scheme is, and so you can adjust UI colors accordingly.
-        </ThemedText>
-        <ExternalLink href="https://docs.expo.dev/develop/user-interface/color-themes/">
-          <ThemedText type="link">Learn more</ThemedText>
-        </ExternalLink>
-      </Collapsible>
-      <Collapsible title="Animations">
-        <ThemedText>
-          This template includes an example of an animated component. The{' '}
-          <ThemedText type="defaultSemiBold">components/HelloWave.tsx</ThemedText> component uses
-          the powerful{' '}
-          <ThemedText type="defaultSemiBold" style={{ fontFamily: Fonts.mono }}>
-            react-native-reanimated
-          </ThemedText>{' '}
-          library to create a waving hand animation.
-        </ThemedText>
-        {Platform.select({
-          ios: (
-            <ThemedText>
-              The <ThemedText type="defaultSemiBold">components/ParallaxScrollView.tsx</ThemedText>{' '}
-              component provides a parallax effect for the header image.
-            </ThemedText>
-          ),
-        })}
-      </Collapsible>
-    </ParallaxScrollView>
+    <ScrollView contentContainerStyle={styles.container}>
+      <ThemedText type="title" style={styles.title}>ExplainIt AI</ThemedText>
+      <ThemedText style={styles.subtitle}>
+        Upload or take a picture — we'll extract and simplify the text.
+      </ThemedText>
+
+      <View style={styles.buttonRow}>
+        <TouchableOpacity style={styles.button} onPress={takePhoto}>
+          <Text style={styles.buttonText}>📷 Take Photo</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.button} onPress={pickImage}>
+          <Text style={styles.buttonText}>🖼️ Upload Image</Text>
+        </TouchableOpacity>
+      </View>
+
+      {loading && <ActivityIndicator size="large" color="#9b5de5" style={{ marginTop: 20 }} />}
+
+      {imageUri && <Image source={{ uri: imageUri }} style={styles.preview} />}
+
+      {extractedText ? (
+        <View style={styles.resultBox}>
+          <Text style={styles.sectionTitle}>📝 Extracted Text:</Text>
+          <Text style={styles.resultText}>{extractedText}</Text>
+        </View>
+      ) : null}
+
+      {aiResult ? (
+        <View style={styles.resultBox}>
+          <Text style={styles.sectionTitle}>🤖 AI Explanation:</Text>
+          <Text style={styles.resultText}>{aiResult}</Text>
+        </View>
+      ) : null}
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  headerImage: {
-    color: '#808080',
-    bottom: -90,
-    left: -35,
-    position: 'absolute',
+  container: {
+    flexGrow: 1,
+    padding: 20,
+    backgroundColor: "#000",
+    alignItems: "center",
   },
-  titleContainer: {
-    flexDirection: 'row',
-    gap: 8,
+  title: {
+    fontSize: 28,
+    fontWeight: "bold",
+    color: "#fff",
+    marginTop: 40,
+  },
+  subtitle: {
+    color: "#aaa",
+    textAlign: "center",
+    marginVertical: 10,
+  },
+  buttonRow: {
+    flexDirection: "row",
+    marginTop: 20,
+    gap: 10,
+  },
+  button: {
+    backgroundColor: "#9b5de5",
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+  },
+  buttonText: {
+    color: "#fff",
+    fontWeight: "600",
+  },
+  preview: {
+    width: 280,
+    height: 280,
+    borderRadius: 12,
+    marginTop: 20,
+  },
+  resultBox: {
+    backgroundColor: "#1a1a1a",
+    borderRadius: 12,
+    padding: 15,
+    marginTop: 20,
+    width: "100%",
+  },
+  sectionTitle: {
+    color: "#9b5de5",
+    fontWeight: "700",
+    fontSize: 16,
+    marginBottom: 6,
+  },
+  resultText: {
+    color: "#ddd",
+    fontSize: 14,
   },
 });
